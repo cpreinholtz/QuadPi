@@ -223,13 +223,40 @@ lc6 = 5*loopmax/nch
 
 
 
+##fp = open('p','r')
+##kp = float(fp.readline())
+##fp.close()
+##fi = open('i','r')
+##ki = float(fi.readline())
+##fi.close()
+##fd = open('d','r')
+##kd = float(fd.readline())
+##fd.close()
+
+err1 = 0
+with open('pid','r') as fil:
+    try:
+        kp = float(fil.readline())
+    except:
+        kp = 6.0
+        err1 = err1+1
+    try:
+        ki = float(fil.readline())
+    except:
+        ki = 0.001
+    try:
+        kd = float(fil.readline())
+    except:
+        kd = 0.001
+        err1 = err1+1
+    
 
 throttlemult=1.0# servoblaster ises increments of 10us, = .1
-kp = 1.5*throttlemult # PID control values
-ki = 0.0000008*throttlemult
-kd = 0.3*throttlemult
+kp = kp*throttlemult # PID control values
+ki = ki*throttlemult
+kd = kd*throttlemult
 start_integrator = 5.0 #digital INT only activates with small errors
-ierrormax = 1000.0
+ierrormax = 100.0
 ky = 0.5*throttlemult#yaw gain
 
 dmin = 900.0
@@ -326,7 +353,7 @@ normal =  1  #calibration mode =0 #  desired 0 cutoff
 normal2 = 1 #cal mode 0 # error
 normal3 = 1 # cal mode 0 # single channel
 calch = 0 # calibration channel
-pidtune=1 # 1 makes the swith do pid 0 is hover
+pidtune=1 # 1 makes the swith do pid           0 is hover switch
 start = datetime.datetime.now()
 
 while go > 0:
@@ -806,17 +833,24 @@ while go > 0:
                 kp = kp-.01#p
                 
             if desired[2]>10.0:
-                ki = ki+.001#p
+                ki = ki+.0001#i
             elif desired[2] <-10.0:
-                ki = ki-.001#p
+                ki = ki-.0001#i
                 
-            if desired[3]>10.0:
-                kd = kd+.001#p
-            elif desired[3] <-10.0:
-                kd = kd-.001#p
-            #i
-            #d
-            
+            if desired[3]>300.0:
+                kd = kd+.0001#d
+            elif desired[3] < -300.0:
+                kd = kd-.0001#d
+                
+        done = False
+        while not done:
+            try:
+                with open('pid','w') as fil:
+                    fil.write(str(kp)+"\n"+ str(ki)+"\n"+str(kd)+"\n")
+                done = True
+            except KeyboardInterrupt:
+                done=False
+                
 
 
 
@@ -843,9 +877,9 @@ while go > 0:
 ##---wait---------------------------------------------------------wait
 
     if EnableFixedLP:
-        LPEND = datetime.datetime.now()-start ###debug only or tie to LP
+        LPEND = datetime.datetime.now()-start ####debug only or tie to LP
         LPmic = LPEND.microseconds
-##        print str(LPmic) +" is final calc loop time in miliSeconds" ###debug only 
+##        print str(LPmic) +" is final calc loop time in miliSeconds" ####debug only 
         while LPmic<LPmicthresh:
             LPEND = datetime.datetime.now()-start ###debug only or tie to LP
             LPmic = LPEND.microseconds
@@ -886,7 +920,7 @@ while go > 0:
 ##    if active ==1:
 ##        print "filterx: %5.3f   accxlp  %5.3f   gyrox %5.3f    " %(sensor[0],AccXLP,deltaXgyro)
     print "sensor x %3.5f      sensory %3.5f      "%(sensor[0], sensor[1] )
-    print "kp %3.5f      ki %3.5f     kd %3.5f       "%(kp,ki,kd)
+    print "kp %3.8f      ki %3.8f     kd %3.8f       "%(kp,ki,kd)
     
 ##        print "filterx: %5.3f   accxlp  %5.3f   gyrox %5.3f    " %(sensor[0],AccXLP,deltaXgyro)
     
