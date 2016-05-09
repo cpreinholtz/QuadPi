@@ -12,13 +12,23 @@ from numpy import matrix
 ##from numpy import linalg
 from LSM9DS0 import *
 bus = smbus.SMBus(1)
+
+
+##import pigpio
+##pi = pigpio.pi()
+##pi.set_mode( 19 , pigpio.INPUT )
+##pi.set_mode( 20 , pigpio.INPUT )
+##pi.set_mode( 21 , pigpio.INPUT )
+##pi.set_mode( 26 , pigpio.INPUT )
+##pi.set_mode( 16 , pigpio.INPUT )
+##pi.set_mode( 13 , pigpio.INPUT )
+
+
+
 try:
     import RPi.GPIO as GPIO
 except RunTimeError:
-    print("error1234")
-    
-    
-    
+    print("error1234") 
     
 GPIO.setmode(GPIO.BCM)#  this uses gpio numbering system
 GPIO.setup(19, GPIO.IN)#thro
@@ -53,6 +63,32 @@ GPIO.setup(13, GPIO.IN)#aux
 ###        print str(otime.microseconds) + " is actual len   "+str(len)+" was desired " 
 ##        return -1
 
+
+
+
+##aadd = 0x04
+##
+##
+##d0add = 0x10
+##d1add = 0x12
+##d2add = 0x14
+##d3add = 0x16
+##d4add = 0x18
+##d5add = 0x1A
+##
+##def readA(ARDUINO_ADDR, DATA_ADDR):
+##    bus.write_byte(ARDUINO_ADDR, DATA_ADDR)
+##    l = bus.read_byte_data(A_ADDR)
+##    bus.write_byte(ARDUINO_ADDR, DATA_ADDR+0x01)
+##    l = bus.read_byte_data(A_ADDR)
+##
+##    combined = (l | h <<8)
+##    return combined  if combined < 32768 else combined - 65536
+
+
+
+
+
 def writeACC(register,value):
         bus.write_byte_data(ACC_ADDRESS , register, value)
         return -1
@@ -66,6 +102,7 @@ def writeGRY(register,value):
         return -1
 
 
+    
 
 def readACCx():
     acc_l = bus.read_byte_data(ACC_ADDRESS, OUT_X_L_A)
@@ -163,7 +200,8 @@ debounce2t=300
 xoffset= 0.0
 yoffset= 0.0#for calibration
 offsetmult = 0.5 #lpf for calibration
-
+rgxoff = 0.0
+rgyoff = 0.0
 max = 0.0001
 
 #initialise the accelerometer
@@ -179,7 +217,12 @@ writeMAG(CTRL_REG7_XM, 0b00000000) #Continuous-conversion mode
 writeGRY(CTRL_REG1_G, 0b00001111) #Normal power mode, all axes enabled
 writeGRY(CTRL_REG4_G, 0b00110000) #Continuos update, 2000 dps full scale
 
-
+acc1y = 0.0
+acc2y = 0.0
+acc3y = 0.0
+acc1x = 0.0 
+acc2x = 0.0
+acc3x = 0.0
 
 
 #---critical setup------------------------------------------- ---------------critical setup
@@ -201,7 +244,7 @@ LPmicthresh = 55000 #this is how long each loop will be if enbled above
 RAD_TO_DEG = 57.29578
 M_PI = 3.14159265358979323846
 G_GAIN = 0.070  # [deg/s/LSB]  If you change the dps for gyro, you need to update this value accordingly
-LP = LPmicthresh/1000000.0   	# Loop period = 35ms.   This needs to match the time it takes each loop to run
+LP = (LPmicthresh+240)/1000000.0   	# Loop period = 35ms.   This needs to match the time it takes each loop to run
 
 
 loopcnt=0
@@ -233,22 +276,26 @@ lc6 = 5*loopmax/nch
 ##kd = float(fd.readline())
 ##fd.close()
 
-err1 = 0
+err1 = False
+
 with open('pid','r') as fil:
-    try:
-        kp = float(fil.readline())
-    except:
-        kp = 6.0
-        err1 = err1+1
-    try:
-        ki = float(fil.readline())
-    except:
-        ki = 0.001
-    try:
-        kd = float(fil.readline())
-    except:
-        kd = 0.001
-        err1 = err1+1
+    with open('pid2', 'r') as fil2:
+        try:#try to get kp ki and kd
+            kp = float(fil.readline())
+            ki = float(fil.readline())
+            kd = float(fil.readline())
+            
+        except:# try to load data from the backup file
+            try:
+                kp = float(fil2.readline())
+                ki = float(fil2.readline())
+                kd = float(fil2.readline())
+                
+            except:#use default values if both files are corrupted
+                kp = 6.0
+                ki = 0.001
+                kd = 0.001
+                err1 = True
     
 
 throttlemult=1.0# servoblaster ises increments of 10us, = .1
@@ -261,15 +308,15 @@ ky = 0.5*throttlemult#yaw gain
 
 dmin = 900.0
 dmax = 2100.0
-maxrollangle=35.0 #when 2000 or 1000 pwm
+maxrollangle=10.0 #when 2000 or 1000 pwm
 pwmcenter = 1467.0#used to find 0 in roll yaw elev
 pwmmax=650#per side
 pwmmult = -(maxrollangle)/pwmmax #negative because reciver is opposite sensor
 
 dwindow = 500.0
-activate = 1225.0
+activate = 1150.0
 inactive = 1000.0
-active=0
+active=False
 zerodeg = 5.0
 oldd0 = .3
 zeropwm = 50.0
@@ -294,6 +341,14 @@ yawtrim=0.0
 
 #---kalman filter initialization---------------------- -------------------kalman filter initialization
 #kalman filter initialization
+AA =  0.80      # Complementary filter constant
+cfx = 0.0
+cfy = 0.0
+cfxlast = 0.0
+cfylast = 0.0
+
+
+
 theta0 = 0.0
 thetadot0 = 0.0
 thetadotbias = 0.0
@@ -348,15 +403,15 @@ ID = matrix([  [1.0,0.0,0.0], [0.0,1.0,0.0], [0.0,0.0,1.0] ])
 
 
 
-go = 1
-normal =  1  #calibration mode =0 #  desired 0 cutoff
-normal2 = 1 #cal mode 0 # error
-normal3 = 1 # cal mode 0 # single channel
+go = True
+normal =  True  #calibration mode =0 #  desired 0 cutoff
+normal2 = True #cal mode 0 # error
+normal3 = True # cal mode 0 # single channel
 calch = 0 # calibration channel
-pidtune=1 # 1 makes the swith do pid           0 is hover switch
+pidtune=True # 1 makes the swith do pid           0 is hover switch
 start = datetime.datetime.now()
 
-while go > 0:
+while go:
  
 ##---sensor-----------------------------------------------------sensor
     # ##############################get sensor values
@@ -375,10 +430,37 @@ while go > 0:
         AccYangle -= 270.0
     else:
         AccYangle += 90.0 
-
+        
+    acc3x = acc2x
+    acc2x= acc1x
+    acc1x = AccXangle
+    
+    acc3y = acc2y
+    acc2y = acc1y
+    acc1y = AccYangle
+    
+    accMAx = (acc1x+acc2x+acc3x)/3.0
+    accMAy = (acc1y+acc2y+acc3y)/3.0
+        
 	#Convert Gyro raw to degrees per second
     rate_gyr_x =  GYRx * G_GAIN
-    rate_gyr_y =  GYRy * G_GAIN   
+    rate_gyr_y =  GYRy * G_GAIN  
+    
+##    if desired[5]> 1450.0: #calibration
+##        rgxoff = offsetmult*rgxoff+(1-offsetmult)*rate_gyr_x
+##        rgyoff = offsetmult*rgyoff+(1-offsetmult)*rate_gyr_y
+##    else:
+##        rate_gyr_x = rate_gyr_x-rgxoff
+##        rate_gyr_y = rate_gyr_y-rgyoff
+     
+##---CFilter---------------------------------------------------------Cfilter
+
+    cfx =AA*(cfx+rate_gyr_x*LP) +(1 - AA) * accMAx
+    cfy =AA*(cfy+rate_gyr_y*LP) +(1 - AA) * accMAy
+    cfrx = (cfx - cfxlast)/LP
+    cfry = (cfy - cfylast)/LP
+    cfxlast = cfx
+    cfylast = cfy
     
 ##    LPEND = datetime.datetime.now()-start ###debug only or tie to LP
 ##    LPmic = LPEND.microseconds
@@ -391,8 +473,10 @@ while go > 0:
     
     Px = F*Px*F.T +Q   #guess covariance
     
-    Zx[0,0] =  AccXangle #get new sensor values
-    Zx[1,0] =  rate_gyr_x
+##    Zx[0,0] =  cfx #get new sensor values
+##    Zx[1,0] =  rate_gyr_x
+    Zx[0,0] =  cfx #get new sensor values
+    Zx[1,0] =  cfrx
     
     Yx = Zx - H*Xx # find difference between sensors and model
     
@@ -411,8 +495,10 @@ while go > 0:
     
     Py = F*Py*F.T +Q   #guess covariance
     
-    Zy[0,0] =  AccYangle #get new sensor values
-    Zy[1,0] =  rate_gyr_y
+##    Zy[0,0] =  cfy #get new sensor values
+##    Zy[1,0] =  rate_gyr_y
+    Zy[0,0] =  cfy #get new sensor values
+    Zy[1,0] =  cfry
     
     Yy = Zy - H*Xy # find difference between sensors and model
     
@@ -426,13 +512,12 @@ while go > 0:
     
     
     #####calibration
-    
-        #####calibration mode only
     if desired[5]>1450.0:  #calibration
         sensor[1] = Xy[0,0]
         sensor[0] = Xx[0,0]
         xoffset = offsetmult*xoffset+(1-offsetmult)*sensor[0]
         yoffset = offsetmult*yoffset+(1-offsetmult)*sensor[1]
+        
     else: #caliration complete
         sensor[1] = Xy[0,0]-yoffset
         sensor[0] = Xx[0,0]-xoffset
@@ -443,8 +528,12 @@ while go > 0:
     
     
 ##---error---------------------------------------------------------error
-    error[0] = desired[1]-sensor[0]
-    error[1] = desired[2] -sensor[1]
+    if  pidtune: #locked at 0
+        error[0] = 0.0-sensor[0]
+        error[1] = 0.0 -sensor[1]
+    else:
+        error[0] = desired[1]-sensor[0]
+        error[1] = desired[2] -sensor[1]
     derror[0] = error[0]-errorlast[0]
     derror[1] = error[1]-errorlast[1]
     if active:
@@ -459,7 +548,7 @@ while go > 0:
     base = desired[0]*throttlemult# ###maybe adust? need a 1000 to 1900 spread
     throt = [base,base,base,base] # FL FR BL BR
     
-    if active ==1 and normal2==1:
+    if active and normal2:
 
         # -------------------------------pitch
         throt[0] +=(kp*error[0] +kd*derror[0] + ki*ierror[0])
@@ -476,10 +565,11 @@ while go > 0:
         #throt[1] -=yawtrim
         #throt[2] -=yawtrim
         #throt[3] +=yawtrim
-        throt[0] +=(desired[3]*ky)
-        throt[1] -=(desired[3]*ky)
-        throt[2] -=(desired[3]*ky)
-        throt[3] +=(desired[3]*ky)
+        if not pidtune:
+            throt[0] +=(desired[3]*ky)
+            throt[1] -=(desired[3]*ky)
+            throt[2] -=(desired[3]*ky)
+            throt[3] +=(desired[3]*ky)
 
 
 
@@ -491,23 +581,35 @@ while go > 0:
 ##    print str(LPmic) +" is time after pid in miliSeconds" ###debug only
     
 ####---pwm------------------------------------------------------------PWM
+
+#servo blaster
 ##    os.system("echo 0="+str( int(throt[0]))+ "> /dev/servoblaster")  # FL gpio4
 ##    os.system("echo 1="+str( int(throt[1]))+ "> /dev/servoblaster")  #FRgpio17
 ##    os.system("echo 2="+str( int(throt[2]))+ "> /dev/servoblaster")   #BL gpio18
 ##    os.system("echo 3="+str( int(throt[3]))+ "> /dev/servoblaster")   #BR gpio27
 ##    
+
+#my function using gpio
 ##    mypwmout(throt[0] , 4)
 ##    mypwmout(throt[1] , 17)
 ##    mypwmout(throt[2] , 18)
 ##    mypwmout(throt[3] , 27)
     
 ##    print "throt0: %5i 1: %5i  2: %5i  3: %5i" %(int(throt[0]), int(throt[1]), int(throt[2]) , int(throt[3]))###debug only
+    
+    
     throt[0] = int( throt[0] / Tonestep)
     throt[1] = int( throt[1] / Tonestep)
     throt[2] = int( throt[2] / Tonestep)
     throt[3] = int( throt[3] / Tonestep)
     
-    if normal3 ==0:##calibraton mode
+#adafruit
+    if normal3:##calibraton mode
+            pwm.setPWM(0 , 0 , throt[0])
+            pwm.setPWM(1 , 0 , throt[1])   
+            pwm.setPWM(2 , 0 , throt[2])
+            pwm.setPWM(3 , 0 , throt[3])
+    else:
         if calch == 0:
             pwm.setPWM(0 , 0 , throt[0])
         elif calch == 1:
@@ -516,11 +618,7 @@ while go > 0:
             pwm.setPWM(2 , 0 , throt[2])
         elif calch == 3:
             pwm.setPWM(3 , 0 , throt[3])
-    else:
-            pwm.setPWM(0 , 0 , throt[0])
-            pwm.setPWM(1 , 0 , throt[1])   
-            pwm.setPWM(2 , 0 , throt[2])
-            pwm.setPWM(3 , 0 , throt[3])
+
     
     
 ##    print "throt0: %5i 1: %5i  2: %5i  3: %5i" %(int(throt[0]), int(throt[1]), int(throt[2]) , int(throt[3]))##debug only
@@ -531,6 +629,9 @@ while go > 0:
 ##    LPEND = datetime.datetime.now()-start ###debug only or tie to LP
 ##    LPmic = LPEND.microseconds
 ##    print str(LPmic) +" is time after output in miliSeconds" ###debug only
+
+
+
 
 ##---desired0throt---------------------------------------------------------desired
     if loopcnt==lc1:# throttle,  pitch, roll, yaw, gear, aux 
@@ -569,11 +670,11 @@ while go > 0:
         if tru:
             r0err=r0err-1;
             desired[thisdesired] = oldd0*desired[thisdesired]+(1-oldd0)*desirednext[thisdesired]
-            if desired[thisdesired]<activate and normal ==1:
+            if desired[thisdesired]<activate and normal:
                 desired[thisdesired]=inactive
-                active = 0
+                active = False
             else:
-                active=1
+                active=True
                
         else:#error
             r0err=r0err+1;
@@ -679,7 +780,8 @@ while go > 0:
 
 
         
-    elif desired[4]>1500.0 and pidtune ==0: #locked
+    elif desired[4]>1500.0 and not pidtune: #locked
+
         desired[1] = 0.0
         desired[2] = 0.0
         desired[3] = 0.0
@@ -819,34 +921,51 @@ while go > 0:
 
 ##        else:
 ##            print " reciever error roll" ###debug only     
+
+
+
+
+
 ##
 ##    LPEND = datetime.datetime.now()-start ###debug only or tie to LP
 ##    LPmic = LPEND.microseconds
 ##    print str(LPmic) +" is time after desired in miliSeconds" ###debug only 
     
     ############pid tuning  
-    if pidtune ==1:
+    if pidtune:
         if desired[4]>1450.0:#pid tuning mode
-            if desired[1]>10.0:
-                kp = kp+.01#p
-            elif desired[1] <-10.0:
-                kp = kp-.01#p
-                
-            if desired[2]>10.0:
-                ki = ki+.0001#i
-            elif desired[2] <-10.0:
-                ki = ki-.0001#i
-                
-            if desired[3]>300.0:
-                kd = kd+.0001#d
-            elif desired[3] < -300.0:
-                kd = kd-.0001#d
-                
-        done = False
+            if desired[1]<-maxrollangle/3.0:
+                kp = kp+.05#p
+            elif desired[1] >maxrollangle/3.0:
+                kp = kp-.2#p
+                if kp<0.05:
+                    kp = 0.0
+            if desired[2]>maxrollangle/3.0:
+                ki = ki+.001#i
+            elif desired[2] <-maxrollangle/3.0:
+                ki = ki-.001#i
+                if ki<0.0:
+                    ki = 0.0
+            if desired[3]<-300.0:
+                kd = kd+.001#d
+            elif desired[3] >300.0:
+                kd = kd-.001#d
+                if kd<0.0:
+                    kd = 0.0
+        done = False#save pid
         while not done:
             try:
                 with open('pid','w') as fil:
                     fil.write(str(kp)+"\n"+ str(ki)+"\n"+str(kd)+"\n")
+                done = True
+            except KeyboardInterrupt:
+                done=False
+                
+        done = False#save a backup pid
+        while not done:
+            try:
+                with open('pid2','w') as fil2:
+                    fil2.write(str(kp)+"\n"+ str(ki)+"\n"+str(kd)+"\n")
                 done = True
             except KeyboardInterrupt:
                 done=False
@@ -878,17 +997,27 @@ while go > 0:
 
     if EnableFixedLP:
         LPEND = datetime.datetime.now()-start ####debug only or tie to LP
-        LPmic = LPEND.microseconds
+##        LPmic = LPEND.microseconds
+        LPsecondsleft =  float(LPmicthresh - LPEND.microseconds)/1000000.0 #
+        if LPsecondsleft>.00001:# need a positive number
+            time.sleep(LPsecondsleft)
+            
+            
+        
 ##        print str(LPmic) +" is final calc loop time in miliSeconds" ####debug only 
-        while LPmic<LPmicthresh:
-            LPEND = datetime.datetime.now()-start ###debug only or tie to LP
-            LPmic = LPEND.microseconds
+##        while LPmic<LPmicthresh:
+##            LPEND = datetime.datetime.now()-start ###debug only or tie to LP
+##            LPmic = LPEND.microseconds
 ##            if debounce2<debounce2t:
 ##                debounce2+=1
 ##            else:
 ##                print str(LPmic) +" is current loop time in miliSeconds" ###debug only 
 ##                debounce2=0
-##        print str(LPmic) +" is total loop time in miliSeconds" ###debug only 
+
+
+        LPEND = datetime.datetime.now()-start ####debug only or tie to LP
+        LPmic = LPEND.microseconds
+        print str(LPmic) +" is total loop time in miliSeconds" ###debug only 
         start = datetime.datetime.now()
         
         
@@ -915,12 +1044,14 @@ while go > 0:
 ##    print "throt0: %5i 1: %5i  2: %5i  3: %5i" %(int(throt[0]), int(throt[1]), int(throt[2]) , int(throt[3]))
     
 
-    # #################debug only
-    print "FL: %3s  FR:  %3s   BL: %3s  BR: %3s" %(str(int(throt[0])), str(int(throt[1])), str(int(throt[2])), str(int(throt[3])))
+    # #################printer debugg
+    #print "FL: %3s  FR:  %3s   BL: %3s  BR: %3s" %(str(int(throt[0])), str(int(throt[1])), str(int(throt[2])), str(int(throt[3])))
 ##    if active ==1:
 ##        print "filterx: %5.3f   accxlp  %5.3f   gyrox %5.3f    " %(sensor[0],AccXLP,deltaXgyro)
     print "sensor x %3.5f      sensory %3.5f      "%(sensor[0], sensor[1] )
-    print "kp %3.8f      ki %3.8f     kd %3.8f       "%(kp,ki,kd)
+    print "cfxr %3.5f   rgyrx %3.5f   y1 %3.5f      y2 %3.5f       "%(cfrx, rate_gyr_x , cfry , rate_gyr_y )
+    print "accmax %3.5f      y %3.5f      "%(accMAx, accMAy )
+    #print "kp %3.8f      ki %3.8f     kd %3.8f       "%(kp,ki,kd)
     
 ##        print "filterx: %5.3f   accxlp  %5.3f   gyrox %5.3f    " %(sensor[0],AccXLP,deltaXgyro)
     
@@ -937,7 +1068,7 @@ while go > 0:
 
         
         
-    print "throt: %5.2f   pitch: %5.2f   roll: %5.2f   yaw: %5.2f   lock: %5.2f" %(desired[0],desired[1], desired[2] ,desired[3], desired[4])
+  #  print "throt: %5.2f   pitch: %5.2f   roll: %5.2f   yaw: %5.2f   lock: %5.2f" %(desired[0],desired[1], desired[2] ,desired[3], desired[4])
     #print "avg: %5.2f" %(avg)
     
     
