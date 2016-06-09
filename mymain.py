@@ -37,7 +37,16 @@ GPIO.setup(21, GPIO.IN)#rudd
 GPIO.setup(26, GPIO.IN)#aile
 GPIO.setup(16, GPIO.IN)#gear
 GPIO.setup(13, GPIO.IN)#aux
-
+GPIO.setup(6, GPIO.OUT)#aux
+myled = 6
+GPIO.output(myled, 1)
+time.sleep(.3)
+GPIO.output(myled, 0)
+time.sleep(.3)
+GPIO.output(myled, 1)
+time.sleep(.3)
+GPIO.output(myled, 0)
+time.sleep(.3)
 ##
 ##GPIO.setup(4,GPIO.OUT)
 ##GPIO.setup(17,GPIO.OUT)
@@ -202,6 +211,8 @@ yoffset= 0.0#for calibration
 offsetmult = 0.5 #lpf for calibration
 rgxoff = 0.0
 rgyoff = 0.0
+rgxn = 0.0
+rgyn = rgxn
 max = 0.0001
 
 #initialise the accelerometer
@@ -226,6 +237,14 @@ acc3x = 0.0
 
 
 #---critical setup------------------------------------------- ---------------critical setup
+c1=False
+c2 = False
+cxavg = 10.0
+cyavg = 10.0
+clp = 0.9
+cth = 0.6
+
+
 f = 50#pwm freq maybe use 60
 pwm = PWM(0x40)
 pwm.setPWMFreq(60)  #maybe use 60? maybe use f
@@ -341,7 +360,7 @@ yawtrim=0.0
 
 #---kalman filter initialization---------------------- -------------------kalman filter initialization
 #kalman filter initialization
-AA =  0.80      # Complementary filter constant
+AA =  0.87      # Complementary filter constant
 cfx = 0.0
 cfy = 0.0
 cfxlast = 0.0
@@ -446,17 +465,17 @@ while go:
     rate_gyr_x =  GYRx * G_GAIN
     rate_gyr_y =  GYRy * G_GAIN  
     
-##    if desired[5]> 1450.0: #calibration
-##        rgxoff = offsetmult*rgxoff+(1-offsetmult)*rate_gyr_x
-##        rgyoff = offsetmult*rgyoff+(1-offsetmult)*rate_gyr_y
-##    else:
-##        rate_gyr_x = rate_gyr_x-rgxoff
-##        rate_gyr_y = rate_gyr_y-rgyoff
+    if desired[5]> 1450.0: #calibration
+        rgxoff = offsetmult*rgxoff+(1-offsetmult)*rate_gyr_x
+        rgyoff = offsetmult*rgyoff+(1-offsetmult)*rate_gyr_y
+    else:
+        rgxn = rate_gyr_x-rgxoff
+        rgyn = rate_gyr_y-rgyoff
      
 ##---CFilter---------------------------------------------------------Cfilter
 
-    cfx =AA*(cfx+rate_gyr_x*LP) +(1 - AA) * accMAx
-    cfy =AA*(cfy+rate_gyr_y*LP) +(1 - AA) * accMAy
+    cfx =AA*(cfx+rgxn*LP) +(1 - AA) * accMAx
+    cfy =AA*(cfy+rgyn*LP) +(1 - AA) * accMAy
     cfrx = (cfx - cfxlast)/LP
     cfry = (cfy - cfylast)/LP
     cfxlast = cfx
@@ -476,7 +495,7 @@ while go:
 ##    Zx[0,0] =  cfx #get new sensor values
 ##    Zx[1,0] =  rate_gyr_x
     Zx[0,0] =  cfx #get new sensor values
-    Zx[1,0] =  cfrx
+    Zx[1,0] =  rate_gyr_x
     
     Yx = Zx - H*Xx # find difference between sensors and model
     
@@ -498,7 +517,7 @@ while go:
 ##    Zy[0,0] =  cfy #get new sensor values
 ##    Zy[1,0] =  rate_gyr_y
     Zy[0,0] =  cfy #get new sensor values
-    Zy[1,0] =  cfry
+    Zy[1,0] =  rate_gyr_y
     
     Yy = Zy - H*Xy # find difference between sensors and model
     
@@ -517,10 +536,19 @@ while go:
         sensor[0] = Xx[0,0]
         xoffset = offsetmult*xoffset+(1-offsetmult)*sensor[0]
         yoffset = offsetmult*yoffset+(1-offsetmult)*sensor[1]
+        c1 = False
         
     else: #caliration complete
         sensor[1] = Xy[0,0]-yoffset
         sensor[0] = Xx[0,0]-xoffset
+        cxavg = cxavg*clp + sensor[0]*(1-clp)
+        cyavg = cyavg*clp + sensor[1]*(1-clp)
+        if abs(cxavg)<cth and abs(cyavg) < cth:
+            c1 = True
+        else:
+            c1 = False
+    
+    GPIO.output(myled,c1)
 
 ##    LPEND = datetime.datetime.now()-start ###debug only or tie to LP
 ##    LPmic = LPEND.microseconds
@@ -934,41 +962,61 @@ while go:
     ############pid tuning  
     if pidtune:
         if desired[4]>1450.0:#pid tuning mode
+            
+            
+            
+            
+            
             if desired[1]<-maxrollangle/3.0:
+                c1 = not c1
+                GPIO.output(myled,c1)
                 kp = kp+.05#p
             elif desired[1] >maxrollangle/3.0:
+                c1 = not c1
+                GPIO.output(myled,c1)
                 kp = kp-.2#p
                 if kp<0.05:
                     kp = 0.0
             if desired[2]>maxrollangle/3.0:
+                c1 = not c1
+                GPIO.output(myled,c1)
                 ki = ki+.001#i
             elif desired[2] <-maxrollangle/3.0:
+                c1 = not c1
+                GPIO.output(myled,c1)
                 ki = ki-.001#i
                 if ki<0.0:
                     ki = 0.0
             if desired[3]<-300.0:
+                c1 = not c1
+                GPIO.output(myled,c1)
                 kd = kd+.001#d
             elif desired[3] >300.0:
+                c1 = not c1
+                GPIO.output(myled,c1)
                 kd = kd-.001#d
                 if kd<0.0:
                     kd = 0.0
-        done = False#save pid
-        while not done:
-            try:
-                with open('pid','w') as fil:
-                    fil.write(str(kp)+"\n"+ str(ki)+"\n"+str(kd)+"\n")
-                done = True
-            except KeyboardInterrupt:
-                done=False
-                
-        done = False#save a backup pid
-        while not done:
-            try:
-                with open('pid2','w') as fil2:
-                    fil2.write(str(kp)+"\n"+ str(ki)+"\n"+str(kd)+"\n")
-                done = True
-            except KeyboardInterrupt:
-                done=False
+                    
+        
+        
+            done = False#save pid
+            while not done:
+                try:
+                    with open('pid','w') as fil:
+                        fil.write(str(kp)+"\n"+ str(ki)+"\n"+str(kd)+"\n")
+                    done = True
+                except KeyboardInterrupt:
+                    done=False
+                    
+            done = False#save a backup pid
+            while not done:
+                try:
+                    with open('pid2','w') as fil2:
+                        fil2.write(str(kp)+"\n"+ str(ki)+"\n"+str(kd)+"\n")
+                    done = True
+                except KeyboardInterrupt:
+                    done=False
                 
 
 
@@ -1049,10 +1097,10 @@ while go:
 ##    if active ==1:
 ##        print "filterx: %5.3f   accxlp  %5.3f   gyrox %5.3f    " %(sensor[0],AccXLP,deltaXgyro)
     print "sensor x %3.5f      sensory %3.5f      "%(sensor[0], sensor[1] )
-    print "cfxr %3.5f   rgyrx %3.5f   y1 %3.5f      y2 %3.5f       "%(cfrx, rate_gyr_x , cfry , rate_gyr_y )
+    print "cfxr %3.5f   rgyrx %3.5f  Xx1 %-3.5f  Xx2 %-3.5f  y1 %3.5f      y2 %3.5f       "%(cfrx, rate_gyr_x ,Xx[1,0]/LP ,Xx[2,0]/LP,cfry , rate_gyr_y )
     print "accmax %3.5f      y %3.5f      "%(accMAx, accMAy )
     #print "kp %3.8f      ki %3.8f     kd %3.8f       "%(kp,ki,kd)
-    
+    print "kp: %3.5f  ki:  %3.5f   kd: %3.5f" %(kp, ki, kd )  
 ##        print "filterx: %5.3f   accxlp  %5.3f   gyrox %5.3f    " %(sensor[0],AccXLP,deltaXgyro)
     
 

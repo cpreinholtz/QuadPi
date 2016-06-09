@@ -1,0 +1,27 @@
+#usefull commands
+
+############git
+git status
+git add filename   				#stages tracked files or adds them to tracked files
+git commit -m "type a message here"
+git push
+
+
+############bootup
+sudo nano /etc/rc.local
+python /home/pi/QuadPi/mymain.py &       	# dont forget the ampersand or you will get stuck in an infinate loop
+
+
+############I2C
+sudo i2cdetect -y 1
+
+
+
+###########misc
+ps ax   					#shows current processes
+kill numberofprocess       			# ex: kill 5124
+
+
+
+
+
