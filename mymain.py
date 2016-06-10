@@ -7,7 +7,10 @@ import time
 import datetime
 import smbus
 import math
+##import Adafruit_PCA9685
+
 from Adafruit_PWM_Servo_Driver import PWM
+
 from numpy import matrix
 ##from numpy import linalg
 from LSM9DS0 import *
@@ -31,13 +34,14 @@ except RunTimeError:
     print("error1234") 
     
 GPIO.setmode(GPIO.BCM)#  this uses gpio numbering system
-GPIO.setup(19, GPIO.IN)#thro
-GPIO.setup(20, GPIO.IN)#elev
-GPIO.setup(21, GPIO.IN)#rudd
-GPIO.setup(26, GPIO.IN)#aile
-GPIO.setup(16, GPIO.IN)#gear
-GPIO.setup(13, GPIO.IN)#aux
-GPIO.setup(6, GPIO.OUT)#aux
+##GPIO.setup(19, GPIO.IN)#thro
+##GPIO.setup(20, GPIO.IN)#elev
+##GPIO.setup(21, GPIO.IN)#rudd
+##GPIO.setup(26, GPIO.IN)#aile
+##GPIO.setup(16, GPIO.IN)#gear
+##GPIO.setup(13, GPIO.IN)#aux
+
+GPIO.setup(6, GPIO.OUT)#led
 myled = 6
 GPIO.output(myled, 1)
 time.sleep(.3)
@@ -47,6 +51,14 @@ GPIO.output(myled, 1)
 time.sleep(.3)
 GPIO.output(myled, 0)
 time.sleep(.3)
+
+print 'Press 1 + 2 on your Wii Remote now ...'
+try:
+  wii=cwiid.Wiimote()
+except RuntimeError:
+  print "Error opening wiimote connection"
+  quit()
+
 ##
 ##GPIO.setup(4,GPIO.OUT)
 ##GPIO.setup(17,GPIO.OUT)
@@ -194,6 +206,24 @@ def setServoPulse(channel, pulse):
     #pwm.setPWM(channel, 0, pulse)
     return -1
 
+def savepid(kp,ki,kd):
+    done = False#save pid
+    while not done:
+        try:
+            with open('pid','w') as fil:
+                fil.write(str(kp)+"\n"+ str(ki)+"\n"+str(kd)+"\n")
+            done = True
+        except KeyboardInterrupt:
+            done=False
+    done = False#save a backup pid
+    while not done:
+        try:
+            with open('pid2','w') as fil2:
+                fil2.write(str(kp)+"\n"+ str(ki)+"\n"+str(kd)+"\n")
+            done = True
+        except KeyboardInterrupt:
+            done=False
+
 #---noncritical initialisation----------------------------------------------------------noncritical initialisation
 pulseb=datetime.datetime.now()
 pulsebegin=pulseb
@@ -327,7 +357,7 @@ ky = 0.5*throttlemult#yaw gain
 
 dmin = 900.0
 dmax = 2100.0
-maxrollangle=10.0 #when 2000 or 1000 pwm
+maxrollangle=5.0 #when 2000 or 1000 pwm
 pwmcenter = 1467.0#used to find 0 in roll yaw elev
 pwmmax=650#per side
 pwmmult = -(maxrollangle)/pwmmax #negative because reciver is opposite sensor
@@ -662,294 +692,394 @@ while go:
 
 
 ##---desired0throt---------------------------------------------------------desired
-    if loopcnt==lc1:# throttle,  pitch, roll, yaw, gear, aux 
-        thisgpio = 19
-        thisdesired = 0
+    buttons = wii.state['buttons']
+    nbuttons = wii.state['nunchuk']['buttons']
+    stk = wii.state['nunchuk']['stick']
+    
+    #throttle
+    wth = stk[1] - wcenter
+    if wth>0 and dth<tmax: #upthrottle
+        dth = dth + wth
+    elif wth<0 and dth>tmin: #upthrottle
+        dth = dth + wth
+    
+    #yaw
+    wyaw =wth = stk[0] - wcenter
+    
+    #roll
+    if bool(buttons & cwiid.BTN_RIGHT):
+        wroll = - maxrollangle 
+    elif bool(buttons & cwiid.BTN_LEFT):
+        wroll = maxrollangle
+    else:
+        wroll = 0;
+    
+#   pitch
+    if bool(buttons & cwiid.BTN_UP):
+        wpitch =  maxrollangle 
+    elif bool(buttons & cwiid.BTN_DOWN):
+        wpitch = maxrollangle
+    else:
+        wpitch = 0;
+    
+    
+    
+    #calibration
+    wcal = bool(buttons & cwiid.BTN_1)
+    
+    #pid tining / hover
+    whover = bool(buttons & cwiid.BTN_B)
+    wnhover = bool(buttons & cwiid.NUNCHUK_BTN_C)
+    
+    if whover:
+        wyaw = 0
+        wroll = 0
+        wpitch = 0
+        if pidtune:
+            if bool(buttons & cwiid.BTN_UP): 
+                c1 = not c1
+                GPIO.output(myled,c1)
+                kp = kp+.05#p
+            if bool(buttons & cwiid.BTN_RIGHT): 
+                c1 = not c1
+                GPIO.output(myled,c1)
+                kp = kp+.001#i
+            if bool(buttons & cwiid.BTN_LEFT): 
+                c1 = not c1
+                GPIO.output(myled,c1)
+                kp = kp+.001#d 
+            savepid(kp,ki,kd)
+            
+    elif wnhover:
+        wyaw = 0
+        wroll = 0
+        wpitch = 0
+        if pidtune:
+            if bool(buttons & cwiid.BTN_UP): 
+                c1 = not c1
+                GPIO.output(myled,c1)
+                kp = kp-.05#p
+                if kp<0.05:
+                    kp = 0.0
+            if bool(buttons & cwiid.BTN_RIGHT): 
+                c1 = not c1
+                GPIO.output(myled,c1)
+                ki = ki-.001#i
+                if ki<0.001:
+                    ki = 0.0
+            if bool(buttons & cwiid.BTN_DOWN): 
+                c1 = not c1
+                GPIO.output(myled,c1)
+                kd = kd-.001#d
+                if kd<0.001:
+                    kd = 0.0
+            savepid(kp,ki,kd)
+
+    #pidtine
+    
+
+
+    
+    
+##    if loopcnt==lc1:# throttle,  pitch, roll, yaw, gear, aux
+     
+       
         
-        tru=1
-        val = GPIO.input(thisgpio)
-        pulsebegin=datetime.datetime.now()
-        while val ==1:
-            val = GPIO.input(thisgpio)
-            etime = datetime.datetime.now() -pulsebegin
-            etimeint = int(etime.microseconds)
-            if etimeint >=thresh1:
-                tru=0
-                break;
-        while val==0:
-            if etimeint >=thresh1:
-                tru=0
-                break;
-            val = GPIO.input(thisgpio)
-            etime = datetime.datetime.now() -pulsebegin
-            etimeint = int(etime.microseconds)
-        pulsea=datetime.datetime.now()##last pulsea read (rising EDGE)
-        while val ==1:
-            if etimeint >=thresh1:
-                tru=0
+        
+        
+        
+        
+         
+##        thisgpio = 19
+##        thisdesired = 0
+        
+##        tru=1
+##        val = GPIO.input(thisgpio)
+##        pulsebegin=datetime.datetime.now()
+##        while val ==1:
+##            val = GPIO.input(thisgpio)
+##            etime = datetime.datetime.now() -pulsebegin
+##            etimeint = int(etime.microseconds)
+##            if etimeint >=thresh1:
+##                tru=0
+##                break;
+##        while val==0:
+##            if etimeint >=thresh1:
+##                tru=0
+##                break;
+##            val = GPIO.input(thisgpio)
+##            etime = datetime.datetime.now() -pulsebegin
+##            etimeint = int(etime.microseconds)
+##        pulsea=datetime.datetime.now()##last pulsea read (rising EDGE)
+##        while val ==1:
+##            if etimeint >=thresh1:
+##                tru=0
+##                
+##                break;
+##            val = GPIO.input(thisgpio)
+##            etime = datetime.datetime.now() -pulsea
+##            
+##        desirednext[thisdesired]= float(etime.microseconds)
+##        if desirednext[thisdesired] <dmin or desirednext[thisdesired]>dmax:
+##            tru=0
+##        if tru:
+##            r0err=r0err-1;
+##            desired[thisdesired] = oldd0*desired[thisdesired]+(1-oldd0)*desirednext[thisdesired]
+##            if desired[thisdesired]<activate and normal:
+##                desired[thisdesired]=inactive
+##                active = False
+##            else:
+##                active=True
+##               
+##        else:#error
+##            r0err=r0err+1;
+##            
+##        if r0err >r0failsafe:#reciver timeout
+##            desired[thisdesired] = inactive
+##            if tru==0:
+##                r0err = r0failsafe+10
                 
-                break;
-            val = GPIO.input(thisgpio)
-            etime = datetime.datetime.now() -pulsea
-            
-        desirednext[thisdesired]= float(etime.microseconds)
-        if desirednext[thisdesired] <dmin or desirednext[thisdesired]>dmax:
-            tru=0
-        if tru:
-            r0err=r0err-1;
-            desired[thisdesired] = oldd0*desired[thisdesired]+(1-oldd0)*desirednext[thisdesired]
-            if desired[thisdesired]<activate and normal:
-                desired[thisdesired]=inactive
-                active = False
-            else:
-                active=True
-               
-        else:#error
-            r0err=r0err+1;
-            
-        if r0err >r0failsafe:#reciver timeout
-            desired[thisdesired] = inactive
-            if tru==0:
-                r0err = r0failsafe+10
+                
+                
+                
 ##        else:
 ##            print " reciever error throt" ###debug only     
             
 ##---desired5aux---------------------------------------------------------desired
-    elif loopcnt==lc6:
-        thisgpio=13
-        thisdesired=5#used to determine if calibration mode is on
-        
-        tru=1
-        val = GPIO.input(thisgpio)
-        pulsebegin=datetime.datetime.now()
-        while val ==1:
-            val = GPIO.input(thisgpio)
-            etime = datetime.datetime.now() -pulsebegin
-            etimeint = int(etime.microseconds)
 
-            if etimeint >=thresh1:
-                tru=0
-##                print " 1 reciever error aux" ###debug only     
-                break;
-        while val==0:
-            if etimeint >=thresh1:
-                tru=0
-##                print etimeint ###debug only     
-##                print " 2 reciever error aux" ###debug only     
-                break;
-            val = GPIO.input(thisgpio)
-            etime = datetime.datetime.now() -pulsebegin
-            etimeint = int(etime.microseconds)
-        pulsea=datetime.datetime.now()##last pulsea read (rising EDGE)
-        while val ==1:
-            if etimeint >=thresh1:
-##                print " 3 reciever error aux" ###debug only     
-                tru=0
-                break;
-            val = GPIO.input(thisgpio)
-            etime = datetime.datetime.now() -pulsea
-        desirednext[thisdesired]= float(etime.microseconds)
-        if desirednext[thisdesired] <dmin or desirednext[thisdesired]>dmax:
-            tru=0
-        if tru:
-            desired[thisdesired] = desired[thisdesired]*dlastmult+desirednext[thisdesired]*(1-dlastmult)
-##        else:
-##            print " reciever error aux" ###debug only     
+    
+    
+##    elif loopcnt==lc6:
+##        thisgpio=13
+##        thisdesired=5#used to determine if calibration mode is on
+##        
+##        tru=1
+##        val = GPIO.input(thisgpio)
+##        pulsebegin=datetime.datetime.now()
+##        while val ==1:
+##            val = GPIO.input(thisgpio)
+##            etime = datetime.datetime.now() -pulsebegin
+##            etimeint = int(etime.microseconds)
+##
+##            if etimeint >=thresh1:
+##                tru=0
+####                print " 1 reciever error aux" ###debug only     
+##                break;
+##        while val==0:
+##            if etimeint >=thresh1:
+##                tru=0
+####                print etimeint ###debug only     
+####                print " 2 reciever error aux" ###debug only     
+##                break;
+##            val = GPIO.input(thisgpio)
+##            etime = datetime.datetime.now() -pulsebegin
+##            etimeint = int(etime.microseconds)
+##        pulsea=datetime.datetime.now()##last pulsea read (rising EDGE)
+##        while val ==1:
+##            if etimeint >=thresh1:
+####                print " 3 reciever error aux" ###debug only     
+##                tru=0
+##                break;
+##            val = GPIO.input(thisgpio)
+##            etime = datetime.datetime.now() -pulsea
+##        desirednext[thisdesired]= float(etime.microseconds)
+##        if desirednext[thisdesired] <dmin or desirednext[thisdesired]>dmax:
+##            tru=0
+##        if tru:
+##            desired[thisdesired] = desired[thisdesired]*dlastmult+desirednext[thisdesired]*(1-dlastmult)
+####        else:
+####            print " reciever error aux" ###debug only     
+##
 
-
-
-
-
-        
-        
-        
-        
-        
-            
-##---desired4gear---------------------------------------------------------desired
-    elif loopcnt==lc2:
-        thisgpio=16
-        thisdesired=4#used to determine if gear is locked
-        
-        tru=1
-        val = GPIO.input(thisgpio)
-        pulsebegin=datetime.datetime.now()
-        while val ==1:
-            val = GPIO.input(thisgpio)
-            etime = datetime.datetime.now() -pulsebegin
-            etimeint = int(etime.microseconds)
-
-            if etimeint >=thresh1:
-                tru=0
-                break;
-        while val==0:
-            if etimeint >=thresh1:
-                tru=0
-                break;
-            val = GPIO.input(thisgpio)
-            etime = datetime.datetime.now() -pulsebegin
-            etimeint = int(etime.microseconds)
-        pulsea=datetime.datetime.now()##last pulsea read (rising EDGE)
-        while val ==1:
-            if etimeint >=thresh1:
-                tru=0
-                break;
-            val = GPIO.input(thisgpio)
-            etime = datetime.datetime.now() -pulsea
-            #etimeint = int(etime.microseconds)
-        desirednext[thisdesired]= float(etime.microseconds)
-        if desirednext[thisdesired] <dmin or desirednext[thisdesired]>dmax:
-            tru=0
-        if tru:
-            desired[thisdesired] = desired[thisdesired]*dlastmult+desirednext[thisdesired]*(1-dlastmult)
-##        else:
-##            print " reciever error gear" ###debug only     
 
 
 
         
-    elif desired[4]>1500.0 and not pidtune: #locked
+        
+        
+##        
+##        
+##            
+####---desired4gear---------------------------------------------------------desired
+##    elif loopcnt==lc2:
+##        thisgpio=16
+##        thisdesired=4#used to determine if gear is locked
+##        
+##        tru=1
+##        val = GPIO.input(thisgpio)
+##        pulsebegin=datetime.datetime.now()
+##        while val ==1:
+##            val = GPIO.input(thisgpio)
+##            etime = datetime.datetime.now() -pulsebegin
+##            etimeint = int(etime.microseconds)
+##
+##            if etimeint >=thresh1:
+##                tru=0
+##                break;
+##        while val==0:
+##            if etimeint >=thresh1:
+##                tru=0
+##                break;
+##            val = GPIO.input(thisgpio)
+##            etime = datetime.datetime.now() -pulsebegin
+##            etimeint = int(etime.microseconds)
+##        pulsea=datetime.datetime.now()##last pulsea read (rising EDGE)
+##        while val ==1:
+##            if etimeint >=thresh1:
+##                tru=0
+##                break;
+##            val = GPIO.input(thisgpio)
+##            etime = datetime.datetime.now() -pulsea
+##            #etimeint = int(etime.microseconds)
+##        desirednext[thisdesired]= float(etime.microseconds)
+##        if desirednext[thisdesired] <dmin or desirednext[thisdesired]>dmax:
+##            tru=0
+##        if tru:
+##            desired[thisdesired] = desired[thisdesired]*dlastmult+desirednext[thisdesired]*(1-dlastmult)
+####        else:
+####            print " reciever error gear" ###debug only     
+##
 
-        desired[1] = 0.0
-        desired[2] = 0.0
-        desired[3] = 0.0
-        
-        
-        
-        
-        
-##---desired3yaw---------------------------------------------------------desired
-    elif loopcnt==lc3:# throttle,  pitch, roll, yaw, aux 
-        thisgpio = 21
-        thisdesired=3
-        
-        tru=1
-        val = GPIO.input(thisgpio)
-        pulsebegin=datetime.datetime.now()
-        while val ==1:
-            val = GPIO.input(thisgpio)
-            etime = datetime.datetime.now() -pulsebegin
-            etimeint = int(etime.microseconds)
-            if etimeint >=thresh1:
-                tru=0
-                break;
-        while val==0:
-            if etimeint >=thresh1:
-                tru=0
-                break;
-            val = GPIO.input(thisgpio)
-            etime = datetime.datetime.now() -pulsebegin
-            etimeint = int(etime.microseconds)
-        pulsea=datetime.datetime.now()##last pulsea read (rising EDGE)
-        while val ==1:
-            if etimeint >=thresh1:
-                tru=0
-                break;
-            val = GPIO.input(thisgpio)
-            etime = datetime.datetime.now() -pulsea
-        desirednext[thisdesired]= float(etime.microseconds)-pwmcenter
-        
-        if desirednext[thisdesired] <-pwmmax or desirednext[thisdesired]>pwmmax:
-            tru=0
-        if tru:
-            desired[thisdesired] = desired[thisdesired]*dlastmult+desirednext[thisdesired]*(1-dlastmult)
-            if desired[thisdesired] >-zeropwm and desired<zeropwm:#####maybet change this might want to trim yaw
-                desired[thisdesired] = 0.0
 
-##        else:
-##            print " reciever error yaw" ###debug only         
-            
+        
+
         
         
         
+##        
+##        
+####---desired3yaw---------------------------------------------------------desired
+##    elif loopcnt==lc3:# throttle,  pitch, roll, yaw, aux 
+##        thisgpio = 21
+##        thisdesired=3
+##        
+##        tru=1
+##        val = GPIO.input(thisgpio)
+##        pulsebegin=datetime.datetime.now()
+##        while val ==1:
+##            val = GPIO.input(thisgpio)
+##            etime = datetime.datetime.now() -pulsebegin
+##            etimeint = int(etime.microseconds)
+##            if etimeint >=thresh1:
+##                tru=0
+##                break;
+##        while val==0:
+##            if etimeint >=thresh1:
+##                tru=0
+##                break;
+##            val = GPIO.input(thisgpio)
+##            etime = datetime.datetime.now() -pulsebegin
+##            etimeint = int(etime.microseconds)
+##        pulsea=datetime.datetime.now()##last pulsea read (rising EDGE)
+##        while val ==1:
+##            if etimeint >=thresh1:
+##                tru=0
+##                break;
+##            val = GPIO.input(thisgpio)
+##            etime = datetime.datetime.now() -pulsea
+##        desirednext[thisdesired]= float(etime.microseconds)-pwmcenter
+##        
+##        if desirednext[thisdesired] <-pwmmax or desirednext[thisdesired]>pwmmax:
+##            tru=0
+##        if tru:
+##            desired[thisdesired] = desired[thisdesired]*dlastmult+desirednext[thisdesired]*(1-dlastmult)
+##            if desired[thisdesired] >-zeropwm and desired<zeropwm:#####maybet change this might want to trim yaw
+##                desired[thisdesired] = 0.0
+##
+####        else:
+####            print " reciever error yaw" ###debug only         
+##            
         
-##---desired1pitch---------------------------------------------------------desired
-    elif loopcnt==lc4:
-        thisgpio = 20
-        thisdesired=1
         
-        tru=1
-        val = GPIO.input(thisgpio)
-        pulsebegin=datetime.datetime.now()
-        while val ==1:
-            val = GPIO.input(thisgpio)
-            etime = datetime.datetime.now() -pulsebegin
-            etimeint = int(etime.microseconds)
-            if etimeint >=thresh1:
-                tru=0
-                break;
-        while val==0:
-            if etimeint >=thresh1:
-                tru=0
-                break;
-            val = GPIO.input(thisgpio)
-            etime = datetime.datetime.now() -pulsebegin
-            etimeint = int(etime.microseconds)
-        pulsea=datetime.datetime.now()##last pulsea read (rising EDGE)
-        while val ==1:
-            if etimeint >=thresh1:
-                tru=0
-                break;
-            val = GPIO.input(thisgpio)
-            etime = datetime.datetime.now() -pulsea
-        desirednext[thisdesired]= (float(etime.microseconds)-pwmcenter)*pwmmult
-        
-        if desirednext[thisdesired] <-maxrollangle or desirednext[thisdesired]>maxrollangle:
-            tru=0
-        if tru:
-            desired[thisdesired] = desired[thisdesired]*dlastmult+desirednext[thisdesired]*(1-dlastmult)
-            #if desired[thisdesired] >-zerodeg and desired<zerodeg:
-                #desired[thisdesired] = 0.0
+##        
+##        
+####---desired1pitch---------------------------------------------------------desired
+##    elif loopcnt==lc4:
+##        thisgpio = 20
+##        thisdesired=1
+##        
+##        tru=1
+##        val = GPIO.input(thisgpio)
+##        pulsebegin=datetime.datetime.now()
+##        while val ==1:
+##            val = GPIO.input(thisgpio)
+##            etime = datetime.datetime.now() -pulsebegin
+##            etimeint = int(etime.microseconds)
+##            if etimeint >=thresh1:
+##                tru=0
+##                break;
+##        while val==0:
+##            if etimeint >=thresh1:
+##                tru=0
+##                break;
+##            val = GPIO.input(thisgpio)
+##            etime = datetime.datetime.now() -pulsebegin
+##            etimeint = int(etime.microseconds)
+##        pulsea=datetime.datetime.now()##last pulsea read (rising EDGE)
+##        while val ==1:
+##            if etimeint >=thresh1:
+##                tru=0
+##                break;
+##            val = GPIO.input(thisgpio)
+##            etime = datetime.datetime.now() -pulsea
+##        desirednext[thisdesired]= (float(etime.microseconds)-pwmcenter)*pwmmult
+##        
+##        if desirednext[thisdesired] <-maxrollangle or desirednext[thisdesired]>maxrollangle:
+##            tru=0
+##        if tru:
+##            desired[thisdesired] = desired[thisdesired]*dlastmult+desirednext[thisdesired]*(1-dlastmult)
+##            #if desired[thisdesired] >-zerodeg and desired<zerodeg:
+##                #desired[thisdesired] = 0.0
 
 ##        else:
 ##            print " reciever error pitch" ###debug only     
     
-    
-##---desired2roll---------------------------------------------------------desired
-    elif loopcnt==lc5:
-        thisgpio= 26
-        thisdesired=2
-        
-        tru=1
-        val = GPIO.input(thisgpio)
-        pulsebegin=datetime.datetime.now()
-        while val ==1:
-            val = GPIO.input(thisgpio)
-            etime = datetime.datetime.now() -pulsebegin
-            etimeint = int(etime.microseconds)
-            #pulseb=datetime.datetime.now()
-            #elapsedtime = pulseb-pulsebegin
-            if etimeint >=thresh1:
-                tru=0
-                break;
-        while val==0:
-            if etimeint >=thresh1:
-                tru=0
-                break;
-            val = GPIO.input(thisgpio)
-            etime = datetime.datetime.now() -pulsebegin
-            etimeint = int(etime.microseconds)
-        pulsea=datetime.datetime.now()##last pulsea read (rising EDGE)
-        while val ==1:
-            if etimeint >=thresh1:
-                tru=0
-                break;
-            val = GPIO.input(thisgpio)
-            etime = datetime.datetime.now() -pulsea
-            #etimeint = int(etime.microseconds)
-        desirednext[thisdesired]= (float(etime.microseconds)-pwmcenter)*pwmmult
-        
-        if desirednext[thisdesired] <-maxrollangle or desirednext[thisdesired]>maxrollangle:
-            tru=0
-        if tru:
-            #avg = .98*avg+.02*float(etime.microseconds)
-            desired[thisdesired] = desired[thisdesired]*dlastmult+desirednext[thisdesired]*(1-dlastmult)
-            #if desired[thisdesired] >-zerodeg and desired<zerodeg:
-            #    desired[thisdesired] = 0.0
-
-##        else:
-##            print " reciever error roll" ###debug only     
-
+##    
+####---desired2roll---------------------------------------------------------desired
+##    elif loopcnt==lc5:
+##        thisgpio= 26
+##        thisdesired=2
+##        
+##        tru=1
+##        val = GPIO.input(thisgpio)
+##        pulsebegin=datetime.datetime.now()
+##        while val ==1:
+##            val = GPIO.input(thisgpio)
+##            etime = datetime.datetime.now() -pulsebegin
+##            etimeint = int(etime.microseconds)
+##            #pulseb=datetime.datetime.now()
+##            #elapsedtime = pulseb-pulsebegin
+##            if etimeint >=thresh1:
+##                tru=0
+##                break;
+##        while val==0:
+##            if etimeint >=thresh1:
+##                tru=0
+##                break;
+##            val = GPIO.input(thisgpio)
+##            etime = datetime.datetime.now() -pulsebegin
+##            etimeint = int(etime.microseconds)
+##        pulsea=datetime.datetime.now()##last pulsea read (rising EDGE)
+##        while val ==1:
+##            if etimeint >=thresh1:
+##                tru=0
+##                break;
+##            val = GPIO.input(thisgpio)
+##            etime = datetime.datetime.now() -pulsea
+##            #etimeint = int(etime.microseconds)
+##        desirednext[thisdesired]= (float(etime.microseconds)-pwmcenter)*pwmmult
+##        
+##        if desirednext[thisdesired] <-maxrollangle or desirednext[thisdesired]>maxrollangle:
+##            tru=0
+##        if tru:
+##            #avg = .98*avg+.02*float(etime.microseconds)
+##            desired[thisdesired] = desired[thisdesired]*dlastmult+desirednext[thisdesired]*(1-dlastmult)
+##            #if desired[thisdesired] >-zerodeg and desired<zerodeg:
+##            #    desired[thisdesired] = 0.0
+##
+####        else:
+####            print " reciever error roll" ###debug only     
+##
 
 
 
@@ -960,63 +1090,6 @@ while go:
 ##    print str(LPmic) +" is time after desired in miliSeconds" ###debug only 
     
     ############pid tuning  
-    if pidtune:
-        if desired[4]>1450.0:#pid tuning mode
-            
-            
-            
-            
-            
-            if desired[1]<-maxrollangle/3.0:
-                c1 = not c1
-                GPIO.output(myled,c1)
-                kp = kp+.05#p
-            elif desired[1] >maxrollangle/3.0:
-                c1 = not c1
-                GPIO.output(myled,c1)
-                kp = kp-.2#p
-                if kp<0.05:
-                    kp = 0.0
-            if desired[2]>maxrollangle/3.0:
-                c1 = not c1
-                GPIO.output(myled,c1)
-                ki = ki+.001#i
-            elif desired[2] <-maxrollangle/3.0:
-                c1 = not c1
-                GPIO.output(myled,c1)
-                ki = ki-.001#i
-                if ki<0.0:
-                    ki = 0.0
-            if desired[3]<-300.0:
-                c1 = not c1
-                GPIO.output(myled,c1)
-                kd = kd+.001#d
-            elif desired[3] >300.0:
-                c1 = not c1
-                GPIO.output(myled,c1)
-                kd = kd-.001#d
-                if kd<0.0:
-                    kd = 0.0
-                    
-        
-        
-            done = False#save pid
-            while not done:
-                try:
-                    with open('pid','w') as fil:
-                        fil.write(str(kp)+"\n"+ str(ki)+"\n"+str(kd)+"\n")
-                    done = True
-                except KeyboardInterrupt:
-                    done=False
-                    
-            done = False#save a backup pid
-            while not done:
-                try:
-                    with open('pid2','w') as fil2:
-                        fil2.write(str(kp)+"\n"+ str(ki)+"\n"+str(kd)+"\n")
-                    done = True
-                except KeyboardInterrupt:
-                    done=False
                 
 
 
