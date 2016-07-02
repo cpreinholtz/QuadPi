@@ -33,6 +33,12 @@ except RuntimeError:
   print "Error opening wiimote connection"
   quit()
 wii.rpt_mode = cwiid.RPT_BTN | cwiid.RPT_NUNCHUK | cwiid.RPT_STATUS
+time.sleep(2)
+s1 = wii.state
+b = int(s1['battery']/10)
+if b>15:b=15
+if b<1:b=1
+wii.led = b
 
 
 def writeACC(register,value):
@@ -150,16 +156,15 @@ def savepid(kp,ki,kd):
             done=False
 
 #---noncritical initialisation----------------------------------------------------------noncritical initialisation
-pulseb=datetime.datetime.now()
-pulsebegin=pulseb
-etime=pulseb
-etimeint=0
-start = datetime.datetime.now()
+
+
+
 ##LPavg = .032 
-debounce1 = 0
-debounce1t = 15
-debounce2=0
-debounce2t=300
+
+##debounce1 = 0
+##debounce1t = 15
+##debounce2=0
+##debounce2t=300
 
 xoffset= 0.0
 yoffset= 0.0#for calibration
@@ -168,7 +173,7 @@ rgxoff = 0.0
 rgyoff = 0.0
 rgxn = 0.0
 rgyn = rgxn
-max = 0.0001
+##max = 0.0001
 
 #initialise the accelerometer
 writeACC(CTRL_REG1_XM, 0b01100111) #z,y,x axis enabled, continuos update,  100Hz data rate
@@ -194,71 +199,49 @@ wcal = False
 wpitch = 0.0
 wroll = 0.0
 dth = 1000.0#inactive
-
+dint=20.0#changes how much hitting throttle does per cycle
+loopcnt=0
+loopmax=300
 
 #---critical setup------------------------------------------- ---------------critical setup
+
 c1=False
-c2 = False
-cxavg = 10.0
+cxavg = 10.0 #this is only used for led indicator light
 cyavg = 10.0
 clp = 0.9
 cth = 0.6
-
-dint=20.0
-
 
 f = 50#pwm freq maybe use 60
 pwm = PWM(0x40)
 pwm.setPWMFreq(60)  #maybe use 60? maybe use f
 ##setServoPulse(0,150)
 Tonestep = 1000000*1/(f*4096.0)# each step in microsecons
-##print "Tonestep"
-##print Tonestep
-
-
-
-thresh1 = 35000# timeout reciever
-EnableFixedLP = 1 #  0 =go as fast as possible  1,2,3,or4 = fixed loop
-LPmicthresh = 55000 #this is how long each loop will be if enbled above
-
 
 RAD_TO_DEG = 57.29578
 M_PI = 3.14159265358979323846
 G_GAIN = 0.070  # [deg/s/LSB]  If you change the dps for gyro, you need to update this value accordingly
-LP = (LPmicthresh+240)/1000000.0   	# Loop period = 35ms.   This needs to match the time it takes each loop to run
+LP = .0175 	# Loop period = 30ms.   This needs to match the time it takes each loop to run
+
+start_integrator = 5.0 #digital INT only activates with small errors
+ierrormax = 100.0
+##ky = 0.5#yaw gain
+
+maxrollangle=5.0 #when 2000 or 1000 pwm
 
 
-loopcnt=0
-loopmax=6# controls how often we read the controller Higher is less frequent 5 will get all channels
-loopmax1 = loopmax-1
-nch = 6 # number of channels gathered from reciever
-lc1 = 0
-lc2 = loopmax/nch
-lc3 = 2*loopmax/nch
-lc4 = 3*loopmax/nch
-lc5 = (4*loopmax/nch)
-lc6 = 5*loopmax/nch
-##print lc1
-##print lc2
-##print lc3
-##print lc4
-##print lc5
-##print lc6
+activate = 1050.0
+inactive = 1000.0
+thmax = 2000.0
+active=False
+base = inactive
 
+error= [0.0,0.0] #pitch roll
+errorlast= [0.0,0.0];
+derror= [0.0,0.0]
+ierror= [0.0,0.0]
+sensor = [0.0,0.0]# ####### pitch roll x y mag?
 
-
-##fp = open('p','r')
-##kp = float(fp.readline())
-##fp.close()
-##fi = open('i','r')
-##ki = float(fi.readline())
-##fi.close()
-##fd = open('d','r')
-##kd = float(fd.readline())
-##fd.close()
-
-err1 = False
-
+# #################pid init
 with open('pid','r') as fil:
     with open('pid2', 'r') as fil2:
         try:#try to get kp ki and kd
@@ -277,52 +260,6 @@ with open('pid','r') as fil:
                 ki = 0.001
                 kd = 0.001
                 err1 = True
-    
-
-throttlemult=1.0# servoblaster ises increments of 10us, = .1
-kp = kp*throttlemult # PID control values
-ki = ki*throttlemult
-kd = kd*throttlemult
-start_integrator = 5.0 #digital INT only activates with small errors
-ierrormax = 100.0
-ky = 0.5*throttlemult#yaw gain
-
-dmin = 900.0
-dmax = 2100.0
-maxrollangle=5.0 #when 2000 or 1000 pwm
-pwmcenter = 1467.0#used to find 0 in roll yaw elev
-pwmmax=650#per side
-pwmmult = -(maxrollangle)/pwmmax #negative because reciver is opposite sensor
-
-dwindow = 500.0
-activate = 1050.0
-inactive = 1000.0
-thmax = 2000.0
-active=False
-zerodeg = 5.0
-oldd0 = .3
-zeropwm = 50.0
-desired= [inactive,0.0,0.0,0.0,1900.0,1000.0] # throttle,  pitch, roll, yaw, aux    length must match numchannels
-base = inactive
-dth=base
-dlastmult=.5
-desirednext= [900.0,0.0,0.0,0.0,1900.0,1000.0]
-r0err = 0
-r0failsafe = 100
-
-
-
-
-error= [0.0,0.0] #pitch roll
-errorlast= [0.0,0.0];
-derror= [0.0,0.0]
-ierror= [0.0,0.0]
-sensor = [0.0,0.0]# ####### pitch roll x y mag?
-
-yawmultiplier = 5.0# #################maybey use magnetometer
-yawtrim=0.0
-
-
 #---kalman filter initialization---------------------- -------------------kalman filter initialization
 #kalman filter initialization
 #AA =  0.87      # Complementary filter constant
@@ -394,6 +331,7 @@ normal2 = True #esc cal mode 0 # error
 normal3 = True #esc  cal mode 0 # single channel
 calch = 0 #esc calibration channel
 pidtune = True
+EnableFixedLP = True #  0 =go as fast as possible  1,2,3,or4 = fixed loop
 nun = False
 if not nun:
     wii.rpt_mode = cwiid.RPT_BTN | cwiid.RPT_STATUS
@@ -401,83 +339,42 @@ if not nun:
 
 
 while go:
-    start = time.clock();
+    start3 = datetime.datetime.now()
+    start2 = time.time()
+    start = time.clock()
     
     #---desired--------------------------------------------------------desired
-    
-##    buttons = wii.state['buttons']
-##    nbuttons = wii.state['nunchuk']['buttons']
-##    stk = wii.state['nunchuk']['stick']
-    if nun:
-        s1 = wii.state
-        buttons = s1['buttons']
-        nbuttons = s1['nunchuk']['buttons']
-        stk = s1['nunchuk']['stick']
-        #throttle
-        wth = stk[1] - wcenter   #upthrottle    
-        if wth>0 and dth<thmax:
-            dth = dth+wth
-        elif wth<0 and dth>inactive:
-            dth = dth+wth
+
+    #no nunchuck
+    s1 = wii.state
+    buttons = s1['buttons']
+    if dth<thmax and bool(buttons &cwiid.BTN_RIGHT):#th up
+        dth = dth+dint;
+    elif dth>inactive and bool(buttons & cwiid.BTN_LEFT):
+        dth = dth-dint;
+    if bool(buttons & cwiid.BTN_B) or (dth < activate):
+        active = False
+    elif(dth>activate) :
+        active = True
         
-        if dth<activate or bool(buttons & cwiid.NUNCHUK_BTN_Z):
-            #base=dth#covered in pid
-            active = True
-        else:
-            active= False
-        #yaw
-        wyaw  = stk[0] - wcenter
-        #roll
-        if bool(buttons & cwiid.BTN_RIGHT):
-            wroll = - maxrollangle 
-        elif bool(buttons & cwiid.BTN_LEFT):
-            wroll = maxrollangle
-        else:
-            wroll = 0;
+    wyaw= 0.0
     #   pitch
-        if bool(buttons & cwiid.BTN_UP):
-            wpitch =  maxrollangle 
-        elif bool(buttons & cwiid.BTN_DOWN):
-            wpitch = maxrollangle
-        else:
-            wpitch = 0;
-        #calibration
-        wcal = bool(buttons & cwiid.BTN_1)
-        #pid tining / hover
-        whover = bool(buttons & cwiid.BTN_B)
-        wnhover = bool(buttons & cwiid.NUNCHUK_BTN_C)
-        
-    else:#no nunchuck
-        s1 = wii.state
-        buttons = s1['buttons']
-        if dth<thmax and bool(buttons &cwiid.BTN_RIGHT):#th up
-            dth <= dth+dint;
-        elif dth>inactive and bool(buttons & cwii.BTN_LEFT):
-            dth <= dth-dint;
-        
-        if bool(buttons and cwiid.BTN_B):
-            acive = False
-        elif(dth>activate) :
-            active = True
-            
-        wyaw= 0.0
-        #   pitch
-        if bool(buttons & cwiid.BTN_1):#back
-            wpitch =  maxrollangle 
-        elif bool(buttons & cwiid.BTN_2):#forward
-            wpitch = -maxrollangle
-        else:
-            wpitch = 0.0
-        #roll
-        if bool(buttons & cwiid.BTN_DOWN): #right
-            wroll = - maxrollangle 
-        elif bool(buttons & cwiid.BTN_UP):#left
-            wroll = maxrollangle
-        else:
-            wroll = 0;
-        whover = bool(buttons & cwiid.BTN_PLUS)
-        wnhover = bool(buttons & cwiid.BTN_MINUS)
-        wcal = bool(buttons & cwiid.BTN_A)
+    if bool(buttons & cwiid.BTN_1):#back
+        wpitch =  maxrollangle 
+    elif bool(buttons & cwiid.BTN_2):#forward
+        wpitch = -maxrollangle
+    else:
+        wpitch = 0.0
+    #roll
+    if bool(buttons & cwiid.BTN_DOWN): #right
+        wroll = - maxrollangle 
+    elif bool(buttons & cwiid.BTN_UP):#left
+        wroll = maxrollangle
+    else:
+        wroll = 0;
+    whover = bool(buttons & cwiid.BTN_PLUS)
+    wnhover = bool(buttons & cwiid.BTN_MINUS)
+    wcal = bool(buttons & cwiid.BTN_A)
     
        
     if whover:
@@ -492,11 +389,11 @@ while go:
             if bool(buttons & cwiid.BTN_RIGHT): 
                 c1 = not c1
                 GPIO.output(myled,c1)
-                kp = kp+.001#i
+                kp = ki+.001#i
             if bool(buttons & cwiid.BTN_LEFT): 
                 c1 = not c1
                 GPIO.output(myled,c1)
-                kp = kp+.001#d 
+                kp = kd+.001#d 
             savepid(kp,ki,kd)
             
     elif wnhover:
@@ -559,7 +456,7 @@ while go:
     rate_gyr_x =  GYRx * G_GAIN
     rate_gyr_y =  GYRy * G_GAIN  
     
-    if wcal: ###########calibration
+    if wcal: ###########calibration1
         rgxoff = offsetmult*rgxoff+(1-offsetmult)*rate_gyr_x
         rgyoff = offsetmult*rgyoff+(1-offsetmult)*rate_gyr_y
     else:
@@ -624,7 +521,7 @@ while go:
     Py = (ID-Ky*H)*Py #fix covariance
     
     
-    #####calibration
+    #####calibration2
     if wcal:  #calibration
         sensor[1] = Xy[0,0]
         sensor[0] = Xx[0,0]
@@ -690,35 +587,24 @@ while go:
         #throt[2] -=yawtrim
         #throt[3] +=yawtrim
         
-        if nun:
-            throt[0] +=(wyaw*ky)#check if this behavior is correct
-            throt[1] -=(wyaw*ky)
-            throt[2] -=(wyaw*ky)
-            throt[3] +=(wyaw*ky)
+##        if nun:
+##            throt[0] +=(wyaw*ky)#check if this behavior is correct
+##            throt[1] -=(wyaw*ky)
+##            throt[2] -=(wyaw*ky)
+##            throt[3] +=(wyaw*ky)
 
 
 
 
-
-
-##    LPEND = datetime.datetime.now()-start ###debug only or tie to LP
-##    LPmic = LPEND.microseconds
-##    print str(LPmic) +" is time after pid in miliSeconds" ###debug only
-    
 ####---pwm------------------------------------------------------------PWM
-
-
-
-
-##    print "throt0: %5i 1: %5i  2: %5i  3: %5i" %(int(throt[0]), int(throt[1]), int(throt[2]) , int(throt[3]))###debug only
-        
+    #adafruit need "ADC" 
     throt[0] = int( throt[0] / Tonestep)
     throt[1] = int( throt[1] / Tonestep)
     throt[2] = int( throt[2] / Tonestep)
     throt[3] = int( throt[3] / Tonestep)
     
 #adafruit
-    if normal3:##esc calibraton mode
+    if normal3:##esc calibraton mode off
             pwm.setPWM(0 , 0 , throt[0])
             pwm.setPWM(1 , 0 , throt[1])   
             pwm.setPWM(2 , 0 , throt[2])
@@ -733,69 +619,39 @@ while go:
         elif calch == 3:
             pwm.setPWM(3 , 0 , throt[3])
 
-    
-    
-##    print "throt0: %5i 1: %5i  2: %5i  3: %5i" %(int(throt[0]), int(throt[1]), int(throt[2]) , int(throt[3]))##debug only
 
-
-
-
-##    LPEND = datetime.datetime.now()-start ###debug only or tie to LP
-##    LPmic = LPEND.microseconds
-##    print str(LPmic) +" is time after output in miliSeconds" ###debug only
-
-
-
-
-#
-
-    #pidtine
-    
-
-
-    
-    if loopcnt<loopmax1:
+    if loopcnt<loopmax:
         loopcnt= loopcnt+1
     else:
         loopcnt=0
+        b = int(s1['battery']/10)
+        if b>15:b=15
+        elif b<1:b=1
+        wii.led = b
         
 ##---wait---------------------------------------------------------wait
-
-    if EnableFixedLP:
-        LPelapsed = time.clock()-start ####debug only or tie to LP
-        print "loop time"+str(LPelapsed)
-##        LPmic = LPEND.microseconds
-##        LPsecondsleft =  float(LPmicthresh - LPEND.microseconds)/1000000.0 #
-##        if LPsecondsleft>.00001:# need a positive number
-##            time.sleep(LPsecondsleft)
-            
-            
-        
-##        print str(LPmic) +" is final calc loop time in miliSeconds" ####debug only 
-##        while LPmic<LPmicthresh:
-##            LPEND = datetime.datetime.now()-start ###debug only or tie to LP
-##            LPmic = LPEND.microseconds
-##            if debounce2<debounce2t:
-##                debounce2+=1
-##            else:
-##                print str(LPmic) +" is current loop time in miliSeconds" ###debug only 
-##                debounce2=0
-
-
-##        LPEND = time.clock()-start ####debug only or tie to LP
-##        LPmic = LPEND.microseconds
-##        print str(LPmic) +" is total loop time in miliSeconds" ###debug only 
+    LPcalc = time.clock()-start
+    LPcalc2= time.time()-start2
+    LPcalc3 = datetime.datetime.now()-start3
+    LPcalc3 = LPcalc3.microseconds/1000000.0 
+    print bool(EnableFixedLP and LPcalc<LP)
+    if EnableFixedLP and LPcalc2<LP:
+        time.sleep(LP-LPcalc2)
+##---done---------------------------------------------------------done print stuff here to debug
+    LPwhole = time.clock()-start
+    LPwhole2 = time.time()-start2
+    LPwhole3 = datetime.datetime.now()-start3
+    LPwhole3 = LPwhole3.microseconds/1000000.0 
         
         
         
-##---done---------------------------------------------------------done
-        
-        
-        
-        
-        
-
-##    print "throt0: %5i 1: %5i  2: %5i  3: %5i" %(int(throt[0]), int(throt[1]), int(throt[2]) , int(throt[3]))
+    print "lpcalc was %1.5f"%(LPcalc)
+    print "lpcalc2 was %1.5f"%(LPcalc2)
+    print "lpcalc3 was %1.5f"%(LPcalc3)
+    print "lpwhole was %1.5f"%(LPwhole)
+    print "lpwhole2 was %1.5f"%(LPwhole2)
+    print "lpwhole3 was %1.5f"%(LPwhole3)
+    print "throt0: %5i 1: %5i  2: %5i  3: %5i" %(int(throt[0]), int(throt[1]), int(throt[2]) , int(throt[3]))
     
 
     # #################printer debugg
@@ -803,7 +659,7 @@ while go:
 ##    if active ==1:
 ##        print "filterx: %5.3f   accxlp  %5.3f   gyrox %5.3f    " %(sensor[0],AccXLP,deltaXgyro)
     print "sensor x %3.5f      sensory %3.5f      "%(sensor[0], sensor[1] )
-    print "cfxr %3.5f   rgyrx %3.5f  Xx1 %-3.5f  Xx2 %-3.5f  y1 %3.5f      y2 %3.5f       "%(cfrx, rate_gyr_x ,Xx[1,0]/LP ,Xx[2,0]/LP,cfry , rate_gyr_y )
+##    print "cfxr %3.5f   rgyrx %3.5f  Xx1 %-3.5f  Xx2 %-3.5f  y1 %3.5f      y2 %3.5f       "%(cfrx, rate_gyr_x ,Xx[1,0]/LP ,Xx[2,0]/LP,cfry , rate_gyr_y )
     print "accmax %3.5f      y %3.5f      "%(accMAx, accMAy )
     #print "kp %3.8f      ki %3.8f     kd %3.8f       "%(kp,ki,kd)
     print "kp: %3.5f  ki:  %3.5f   kd: %3.5f" %(kp, ki, kd )  
@@ -811,18 +667,11 @@ while go:
     
 
     
-##    LP = float(LPEND.microseconds)/1000000
-##    LPavg = .9*(LPavg)+LP*.1
-##    print str(LPavg) +" is average loop time in Seconds" ####debug only 
-##    print str(LP) +" is loop time in Seconds" ####debug only 
+
 
 ##    print "e: %3.5f  de:  %3.5f   ie: %3.5f" %(error[0], derror[0], ierror[0] )
 ##    print "e: %3.5f  de:  %3.5f   ie: %3.5f" %(error[1], derror[1], ierror[1] )
 
 
-        
-        
-  #  print "throt: %5.2f   pitch: %5.2f   roll: %5.2f   yaw: %5.2f   lock: %5.2f" %(desired[0],desired[1], desired[2] ,desired[3], desired[4])
-    #print "avg: %5.2f" %(avg)
     
     
